@@ -38,9 +38,12 @@ interface PingRow {
 
 function rowToMonitor(row: MonitorRow, pings: Ping[]): Monitor {
   // Stays null until the first ping: there is nothing to predict from yet.
-  const nextExpected = row.last_ping
-    ? new Date(new Date(row.last_ping).getTime() + row.interval_minutes * 60 * 1000).toISOString()
+  const expected = row.last_ping
+    ? new Date(new Date(row.last_ping).getTime() + row.interval_minutes * 60 * 1000)
     : null
+  // An interval beyond Date's range (possible in databases from before the schema cap)
+  // yields an Invalid Date, and toISOString() would throw for the whole monitor list.
+  const nextExpected = expected && !Number.isNaN(expected.getTime()) ? expected.toISOString() : null
 
   const monitor: Monitor = {
     id: row.id,

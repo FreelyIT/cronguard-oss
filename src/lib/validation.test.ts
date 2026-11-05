@@ -28,6 +28,24 @@ test('updateMonitorSchema rejects a zero minute interval', () => {
   assert.equal(result.success, false)
 })
 
+test('createMonitorSchema accepts an interval of exactly 365 days', () => {
+  const result = createMonitorSchema.safeParse({ name: 'Yearly', schedule: 'Every 8760 hours' })
+
+  assert.equal(result.success, true)
+})
+
+test('createMonitorSchema rejects an interval longer than 365 days', () => {
+  const result = createMonitorSchema.safeParse({ name: 'Huge', schedule: 'Every 9999999999 hours' })
+
+  assert.equal(result.success, false)
+})
+
+test('updateMonitorSchema rejects an interval longer than 365 days', () => {
+  const result = updateMonitorSchema.safeParse({ id: ID, schedule: 'Every 525601 minutes' })
+
+  assert.equal(result.success, false)
+})
+
 test('pingSchema trims the message', () => {
   const result = pingSchema.parse({ message: '  backup done \n' })
 

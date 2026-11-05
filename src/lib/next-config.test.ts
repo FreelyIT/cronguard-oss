@@ -35,6 +35,12 @@ test('next.config sends a referrer and permissions policy on every path', async 
   assert.equal(valueOf(headers, 'Permissions-Policy'), 'camera=(), microphone=(), geolocation=()')
 })
 
+test('next.config turns the legacy XSS auditor off, as OWASP advises', async () => {
+  const headers = await headersFor('/:path*')
+
+  assert.equal(valueOf(headers, 'X-XSS-Protection'), '0')
+})
+
 test('next.config CSP only allows the app itself as a source', async () => {
   const headers = await headersFor('/:path*')
 

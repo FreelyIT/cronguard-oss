@@ -4,11 +4,15 @@ import { parseScheduleInterval } from './types'
 // Schedule patterns that we support
 const schedulePattern = /^(every\s+\d+\s*(min(ute)?s?|hours?)|every\s+(minute|hour|day|week)|daily|weekly)$/i
 
-// The pattern accepts "every 0 minutes"; an interval of 0 would make a monitor late right after every ping.
-function hasPositiveInterval(schedule: string): boolean {
-  return parseScheduleInterval(schedule) >= 1
+const MAX_INTERVAL_MINUTES = 365 * 24 * 60
+
+// The pattern accepts any number. An interval of 0 makes a monitor late right after
+// every ping; a huge one pushes the next expected ping beyond what a Date can hold.
+function hasSupportedInterval(schedule: string): boolean {
+  const minutes = parseScheduleInterval(schedule)
+  return minutes >= 1 && minutes <= MAX_INTERVAL_MINUTES
 }
-const positiveIntervalMessage = 'Schedule interval must be at least 1'
+const supportedIntervalMessage = 'Schedule interval must be between 1 minute and 365 days'
 
 export const createMonitorSchema = z.object({
   name: z
@@ -21,7 +25,7 @@ export const createMonitorSchema = z.object({
     .min(1, 'Schedule is required')
     .max(50, 'Schedule must be 50 characters or less')
     .regex(schedulePattern, 'Invalid schedule format. Examples: "Every 5 minutes", "Every hour", "Daily"')
-    .refine(hasPositiveInterval, positiveIntervalMessage),
+    .refine(hasSupportedInterval, supportedIntervalMessage),
   graceMinutes: z
     .number()
     .int('Grace period must be a whole number')
@@ -44,7 +48,7 @@ export const updateMonitorSchema = z.object({
     .min(1, 'Schedule cannot be empty')
     .max(50, 'Schedule must be 50 characters or less')
     .regex(schedulePattern, 'Invalid schedule format')
-    .refine(hasPositiveInterval, positiveIntervalMessage)
+    .refine(hasSupportedInterval, supportedIntervalMessage)
     .optional(),
   graceMinutes: z
     .number()

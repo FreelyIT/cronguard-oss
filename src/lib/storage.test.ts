@@ -76,6 +76,17 @@ test('nextExpected is the last ping plus the schedule interval', () => {
   assert.equal(monitor?.nextExpected, new Date(lastPing + 2 * HOUR_MS).toISOString())
 })
 
+test('a monitor whose interval overflows a Date still loads after its first ping', () => {
+  // Created straight through storage, as an existing database from before the schema cap may hold it.
+  const { id } = createMonitor('Huge interval', 'Every 9999999999 hours')
+  recordPing(id)
+
+  const monitor = getAllMonitors().find((m) => m.id === id)
+
+  assert.equal(monitor?.status, 'healthy')
+  assert.equal(monitor?.nextExpected, null)
+})
+
 test('recordPing reports the monitor status after the ping, not before it', () => {
   const { id } = createMonitor('Down until pinged', 'Every hour')
 
