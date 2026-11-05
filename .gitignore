@@ -26,7 +26,11 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
-.env*.local
+# .env*.local alone does not match a bare .env — and docker compose reads .env,
+# so it is the file people reach for when compose reports blank variables.
+.env
+.env.*
+!.env.example
 
 # vercel
 .vercel

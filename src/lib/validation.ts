@@ -1,7 +1,18 @@
 import { z } from 'zod'
+import { parseScheduleInterval } from './types'
 
 // Schedule patterns that we support
 const schedulePattern = /^(every\s+\d+\s*(min(ute)?s?|hours?)|every\s+(minute|hour|day|week)|daily|weekly)$/i
+
+const MAX_INTERVAL_MINUTES = 365 * 24 * 60
+
+// The pattern accepts any number. An interval of 0 makes a monitor late right after
+// every ping; a huge one pushes the next expected ping beyond what a Date can hold.
+function hasSupportedInterval(schedule: string): boolean {
+  const minutes = parseScheduleInterval(schedule)
+  return minutes >= 1 && minutes <= MAX_INTERVAL_MINUTES
+}
+const supportedIntervalMessage = 'Schedule interval must be between 1 minute and 365 days'
 
 export const createMonitorSchema = z.object({
   name: z
@@ -13,7 +24,8 @@ export const createMonitorSchema = z.object({
     .string()
     .min(1, 'Schedule is required')
     .max(50, 'Schedule must be 50 characters or less')
-    .regex(schedulePattern, 'Invalid schedule format. Examples: "Every 5 minutes", "Every hour", "Daily"'),
+    .regex(schedulePattern, 'Invalid schedule format. Examples: "Every 5 minutes", "Every hour", "Daily"')
+    .refine(hasSupportedInterval, supportedIntervalMessage),
   graceMinutes: z
     .number()
     .int('Grace period must be a whole number')
@@ -36,6 +48,7 @@ export const updateMonitorSchema = z.object({
     .min(1, 'Schedule cannot be empty')
     .max(50, 'Schedule must be 50 characters or less')
     .regex(schedulePattern, 'Invalid schedule format')
+    .refine(hasSupportedInterval, supportedIntervalMessage)
     .optional(),
   graceMinutes: z
     .number()
@@ -54,7 +67,9 @@ export const pingSchema = z.object({
     .optional(),
   message: z
     .string()
+    .trim()
     .max(500, 'Message must be 500 characters or less')
+    .transform((value) => (value === '' ? undefined : value))
     .optional(),
 })
 

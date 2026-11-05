@@ -2,7 +2,7 @@ export interface Monitor {
   id: string
   name: string
   schedule: string // cron expression or human readable
-  intervalMinutes?: number // parsed interval in minutes
+  intervalMinutes: number // parsed interval in minutes (always stored)
   graceMinutes: number // how long to wait before alerting
   status: 'healthy' | 'late' | 'down' | 'paused'
   lastPing: string | null
@@ -66,19 +66,9 @@ export function parseScheduleInterval(schedule: string): number {
 }
 
 export function getMonitorStatus(monitor: Monitor): Monitor['status'] {
-  // Check if monitor is paused
-  if (monitor.paused) {
-    // Check if auto-resume time has passed
-    if (monitor.pausedUntil) {
-      const resumeTime = new Date(monitor.pausedUntil).getTime()
-      if (Date.now() >= resumeTime) {
-        // Should be resumed, but return paused status
-        // The background job will handle the actual resume
-        return 'paused'
-      }
-    }
-    return 'paused'
-  }
+  // Expired pauses are lifted in storage before a monitor is read,
+  // so a paused monitor here is paused for real.
+  if (monitor.paused) return 'paused'
 
   if (!monitor.lastPing) return 'down'
 
@@ -86,9 +76,7 @@ export function getMonitorStatus(monitor: Monitor): Monitor['status'] {
   const now = Date.now()
   const graceMs = monitor.graceMinutes * 60 * 1000
 
-  // Get interval from stored value or parse from schedule
-  const intervalMinutes = monitor.intervalMinutes || parseScheduleInterval(monitor.schedule)
-  const intervalMs = intervalMinutes * 60 * 1000
+  const intervalMs = monitor.intervalMinutes * 60 * 1000
 
   // Expected next ping = last ping + interval
   const expectedNextPing = lastPingTime + intervalMs

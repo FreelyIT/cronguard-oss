@@ -37,6 +37,14 @@ interface PingRow {
 }
 
 function rowToMonitor(row: MonitorRow, pings: Ping[]): Monitor {
+  // Stays null until the first ping: there is nothing to predict from yet.
+  const expected = row.last_ping
+    ? new Date(new Date(row.last_ping).getTime() + row.interval_minutes * 60 * 1000)
+    : null
+  // An interval beyond Date's range (possible in databases from before the schema cap)
+  // yields an Invalid Date, and toISOString() would throw for the whole monitor list.
+  const nextExpected = expected && !Number.isNaN(expected.getTime()) ? expected.toISOString() : null
+
   const monitor: Monitor = {
     id: row.id,
     name: row.name,
@@ -45,7 +53,7 @@ function rowToMonitor(row: MonitorRow, pings: Ping[]): Monitor {
     graceMinutes: row.grace_minutes,
     status: 'down',
     lastPing: row.last_ping,
-    nextExpected: null,
+    nextExpected,
     pings,
     createdAt: row.created_at,
     paused: row.paused === 1,
@@ -69,6 +77,7 @@ function rowToPing(row: PingRow): Ping {
 }
 
 export function getAllMonitors(): Monitor[] {
+  checkAndResumeMonitors()
   const s = getStmts()
   const monitorRows = s.getAllMonitors.all() as MonitorRow[]
 
@@ -80,6 +89,7 @@ export function getAllMonitors(): Monitor[] {
 }
 
 export function getMonitor(id: string): Monitor | null {
+  checkAndResumeMonitors()
   const s = getStmts()
   const row = s.getMonitor.get(id) as MonitorRow | undefined
   if (!row) return null
@@ -153,10 +163,17 @@ export function deleteMonitor(id: string): boolean {
   return result.changes > 0
 }
 
-export function recordPing(id: string, success: boolean = true, duration?: number, message?: string, ip?: string): Ping | null {
+export interface PingResult {
+  ping: Ping
+  // The monitor as it stands after this ping.
+  monitor: Pick<Monitor, 'id' | 'name' | 'status'>
+}
+
+export function recordPing(id: string, success: boolean = true, duration?: number, message?: string, ip?: string): PingResult | null {
+  checkAndResumeMonitors()
   const s = getStmts()
 
-  // Check if monitor exists
+  // Lightweight existence check: the monitor row only, without its pings
   const monitorRow = s.getMonitor.get(id) as MonitorRow | undefined
   if (!monitorRow) return null
 
@@ -184,7 +201,9 @@ export function recordPing(id: string, success: boolean = true, duration?: numbe
   })
 
   transaction()
-  return ping
+
+  const { name, status } = rowToMonitor({ ...monitorRow, last_ping: ping.timestamp }, [])
+  return { ping, monitor: { id, name, status } }
 }
 
 export function pauseMonitor(id: string, reason?: string, until?: string): Monitor | null {
@@ -196,7 +215,8 @@ export function pauseMonitor(id: string, reason?: string, until?: string): Monit
   s.pauseMonitor.run({
     id,
     pausedAt: new Date().toISOString(),
-    pausedUntil: until ?? null,
+    // Normalised to toISOString() so the string comparison in getPausedMonitorsToResume holds.
+    pausedUntil: until ? new Date(until).toISOString() : null,
     pauseReason: reason ?? null
   })
 
@@ -213,6 +233,8 @@ export function resumeMonitor(id: string): Monitor | null {
   return getMonitor(id)
 }
 
+// Lifts every pause whose end time has passed. Called before each read, so an
+// expired pause never shows up, with or without a background job running.
 export function checkAndResumeMonitors(): string[] {
   const s = getStmts()
   const now = new Date().toISOString()
@@ -228,17 +250,20 @@ export function checkAndResumeMonitors(): string[] {
 }
 
 export function getStats() {
+  checkAndResumeMonitors()
   const s = getStmts()
-  const all = getAllMonitors()
 
+  // Status depends on the monitor row alone, so the pings are not loaded here.
+  const rows = s.getAllMonitors.all() as MonitorRow[]
+  const statuses = rows.map(row => rowToMonitor(row, []).status)
   const pingCount = s.countPings.get() as { count: number }
 
   return {
-    total: all.length,
-    healthy: all.filter(m => m.status === 'healthy').length,
-    late: all.filter(m => m.status === 'late').length,
-    down: all.filter(m => m.status === 'down').length,
-    paused: all.filter(m => m.status === 'paused').length,
+    total: statuses.length,
+    healthy: statuses.filter(status => status === 'healthy').length,
+    late: statuses.filter(status => status === 'late').length,
+    down: statuses.filter(status => status === 'down').length,
+    paused: statuses.filter(status => status === 'paused').length,
     totalPings: pingCount.count
   }
 }

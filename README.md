@@ -417,6 +417,9 @@ CronGuard stores all data in a SQLite database at `/app/data/cronguard.db`. To p
 |---------------------|---------|-------------|
 | `PORT` | `3000` | Application port |
 | `NODE_ENV` | `production` | Node.js environment |
+| `DATABASE_PATH` | `./data/cronguard.db` | Location of the SQLite database file |
+
+CronGuard sends security headers (CSP, `X-Frame-Options`, `nosniff`, …) on every response. It deliberately does not send `Strict-Transport-Security`: set HSTS on the reverse proxy that terminates TLS.
 
 ## Development
 
@@ -438,6 +441,10 @@ npm install
 npm run dev
 
 # Open http://localhost:3000
+
+# Lint and run the tests (the tests use an in-memory database)
+npm run lint
+npm test
 ```
 
 ### Build from Source

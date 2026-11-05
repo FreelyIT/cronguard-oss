@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { recordPing, getMonitor } from '@/lib/storage'
+import { recordPing } from '@/lib/storage'
 import { pingSchema } from '@/lib/validation'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { ZodError } from 'zod'
@@ -37,24 +37,33 @@ export async function GET(
     })
   }
 
-  const monitor = getMonitor(id)
-  if (!monitor) {
-    return NextResponse.json({ error: 'Monitor not found' }, { status: 404 })
-  }
-
-  // duration is omitted on GET — it's the user's reported job runtime,
-  // not server handler overhead. Only POST with an explicit body fills it.
-  const ip = getClientIp(request)
-  const ping = recordPing(id, true, undefined, undefined, ip)
-
-  return new NextResponse('OK', {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/plain',
-      'X-Ping-ID': ping?.id || '',
-      ...rateLimitHeaders(rateLimit.remaining, rateLimit.resetAt)
+  try {
+    // duration is omitted on GET — it's the user's reported job runtime,
+    // not server handler overhead. Only POST with an explicit body fills it.
+    const ip = getClientIp(request)
+    const result = recordPing(id, true, undefined, undefined, ip)
+    if (!result) {
+      return NextResponse.json({ error: 'Monitor not found' }, { status: 404 })
     }
-  })
+
+    return new NextResponse('OK', {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain',
+        'X-Ping-ID': result.ping.id,
+        ...rateLimitHeaders(rateLimit.remaining, rateLimit.resetAt)
+      }
+    })
+  } catch (error) {
+    console.error(`[Ping] Database error recording ping for monitor ${id}:`, error)
+    return new NextResponse('Internal Server Error', {
+      status: 500,
+      headers: {
+        'Content-Type': 'text/plain',
+        ...rateLimitHeaders(rateLimit.remaining, rateLimit.resetAt)
+      }
+    })
+  }
 }
 
 // POST /api/ping/[id] - Record a ping with details
@@ -77,11 +86,6 @@ export async function POST(
         }
       }
     )
-  }
-
-  const monitor = getMonitor(id)
-  if (!monitor) {
-    return NextResponse.json({ error: 'Monitor not found' }, { status: 404 })
   }
 
   let success = true
@@ -107,21 +111,31 @@ export async function POST(
     }
   }
 
-  const ip = getClientIp(request)
-  const ping = recordPing(id, success, duration, message, ip)
-
-  return NextResponse.json(
-    {
-      status: 'ok',
-      ping_id: ping?.id,
-      monitor: {
-        id: monitor.id,
-        name: monitor.name,
-        status: monitor.status
-      }
-    },
-    {
-      headers: rateLimitHeaders(rateLimit.remaining, rateLimit.resetAt)
+  try {
+    const ip = getClientIp(request)
+    const result = recordPing(id, success, duration, message, ip)
+    if (!result) {
+      return NextResponse.json({ error: 'Monitor not found' }, { status: 404 })
     }
-  )
+
+    return NextResponse.json(
+      {
+        status: 'ok',
+        ping_id: result.ping.id,
+        monitor: result.monitor
+      },
+      {
+        headers: rateLimitHeaders(rateLimit.remaining, rateLimit.resetAt)
+      }
+    )
+  } catch (error) {
+    console.error(`[Ping] Database error recording ping for monitor ${id}:`, error)
+    return NextResponse.json(
+      { error: 'Failed to record ping' },
+      {
+        status: 500,
+        headers: rateLimitHeaders(rateLimit.remaining, rateLimit.resetAt)
+      }
+    )
+  }
 }

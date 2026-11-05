@@ -1,7 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Monitor, parseScheduleInterval } from '@/lib/types'
+import { Monitor } from '@/lib/types'
+import { formatRelativeTime } from '@/lib/dashboard/relative-time'
+import { useOrigin } from '@/lib/use-origin'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import {
   AppFrame,
@@ -39,30 +41,37 @@ const SCHEDULE_PRESETS = [
   'Weekly',
 ] as const
 
-function formatRelativeTime(dateStr: string | null) {
-  if (!dateStr) return 'Never'
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const minutes = Math.floor(diff / 60000)
-  const hours = Math.floor(minutes / 60)
-  const days = Math.floor(hours / 24)
+interface DashboardData {
+  monitors: Monitor[]
+  stats: Stats
+}
 
-  if (days > 0) return `${days}d ago`
-  if (hours > 0) return `${hours}h ago`
-  if (minutes > 0) return `${minutes}m ago`
-  return 'Just now'
+/** Returns the monitors and stats, or null when either could not be loaded (already logged). */
+async function loadDashboard(): Promise<DashboardData | null> {
+  try {
+    const [monitorsRes, statsRes] = await Promise.all([
+      fetch('/api/monitors'),
+      fetch('/api/monitors?stats=true')
+    ])
+    if (!monitorsRes.ok || !statsRes.ok) return null
+    return { monitors: await monitorsRes.json(), stats: await statsRes.json() }
+  } catch (err) {
+    console.error('Failed to fetch data:', err)
+    return null
+  }
 }
 
 // Build a 30-bar heartbeat: real pings (newest → rightmost) plus synthesized
 // `miss` bars for gaps larger than (interval + grace). Bars at the left are
 // padded with faint `idle` slots so all rows have equal width.
-function buildHeartbeat(monitor: Monitor): HBKind[] {
+// `now` is passed in so renders stay pure.
+function buildHeartbeat(monitor: Monitor, now: number): HBKind[] {
   const target = 30
   if (monitor.paused && monitor.pings.length === 0) {
     return Array(target).fill('idle') as HBKind[]
   }
 
-  const intervalMinutes = monitor.intervalMinutes || parseScheduleInterval(monitor.schedule)
-  const intervalMs = intervalMinutes * 60 * 1000
+  const intervalMs = monitor.intervalMinutes * 60 * 1000
   const graceMs = monitor.graceMinutes * 60 * 1000
 
   // pings are newest-first; reverse so oldest-first for iteration.
@@ -85,7 +94,7 @@ function buildHeartbeat(monitor: Monitor): HBKind[] {
 
   // Tail: monitor is currently overdue → append late or miss bars.
   if (monitor.lastPing) {
-    const sinceLast = Date.now() - new Date(monitor.lastPing).getTime()
+    const sinceLast = now - new Date(monitor.lastPing).getTime()
     if (sinceLast > intervalMs + graceMs) {
       const overdue = Math.min(Math.ceil((sinceLast - graceMs) / intervalMs), target)
       for (let i = 0; i < overdue; i++) bars.push('miss')
@@ -107,12 +116,14 @@ export default function Dashboard() {
   const [showModal, setShowModal] = useState(false)
   const [newMonitor, setNewMonitor] = useState({ name: '', schedule: '', graceMinutes: 15 })
   const [editingMonitor, setEditingMonitor] = useState<Monitor | null>(null)
-  const [baseUrl, setBaseUrl] = useState('')
+  const baseUrl = useOrigin()
   const [codeDrawerMonitor, setCodeDrawerMonitor] = useState<{ id: string; name: string } | null>(null)
   const [createdMonitor, setCreatedMonitor] = useState<{ id: string; name: string } | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | 'late' | 'down'>('all')
   const [refreshInterval, setRefreshInterval] = useState(30)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
+  // Wall clock for "x ago" labels and heartbeats, advanced with every data refresh so renders stay pure.
+  const [now, setNow] = useState(() => Date.now())
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
     const id = Date.now()
@@ -122,34 +133,37 @@ export default function Dashboard() {
     }, 4000)
   }, [])
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [monitorsRes, statsRes] = await Promise.all([
-        fetch('/api/monitors'),
-        fetch('/api/monitors?stats=true')
-      ])
-
-      if (monitorsRes.ok) {
-        setMonitors(await monitorsRes.json())
-      }
-      if (statsRes.ok) {
-        setStats(await statsRes.json())
-      }
-    } catch (err) {
-      console.error('Failed to fetch data:', err)
-    } finally {
-      setLoading(false)
+  // A failed load keeps the previous data on screen but still ends the initial spinner.
+  const applyDashboard = useCallback((data: DashboardData | null) => {
+    if (data) {
+      setMonitors(data.monitors)
+      setStats(data.stats)
+      setNow(Date.now())
     }
+    setLoading(false)
   }, [])
 
+  // Refetch after a user action (create, delete, pause, ...).
+  const fetchData = useCallback(async () => {
+    applyDashboard(await loadDashboard())
+  }, [applyDashboard])
+
+  // Initial load plus polling. State is only set in the .then, and `active` drops
+  // a response that lands after the interval changed or the page unmounted.
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setBaseUrl(window.location.origin)
+    let active = true
+    const refresh = () => {
+      loadDashboard().then((data) => {
+        if (active) applyDashboard(data)
+      })
     }
-    fetchData()
-    const interval = setInterval(fetchData, refreshInterval * 1000)
-    return () => clearInterval(interval)
-  }, [refreshInterval, fetchData])
+    refresh()
+    const interval = setInterval(refresh, refreshInterval * 1000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [refreshInterval, applyDashboard])
 
   async function handleCreateMonitor() {
     if (!newMonitor.name || !newMonitor.schedule) return
@@ -340,7 +354,7 @@ export default function Dashboard() {
               data={{
                 count: stats.down,
                 monitorName: firstDown.name,
-                duration: formatRelativeTime(firstDown.lastPing),
+                duration: formatRelativeTime(firstDown.lastPing, now),
                 detail: `Expected ${firstDown.schedule.toLowerCase()} · grace ${firstDown.graceMinutes}m`,
               }}
             />
@@ -369,7 +383,7 @@ export default function Dashboard() {
                 />
                 <Tab
                   label="Active incidents"
-                  count={(stats?.down ?? 0) + (stats?.late ?? 0)}
+                  count={stats?.down ?? 0}
                   accent
                   active={statusFilter === 'down'}
                   onClick={() => setStatusFilter('down')}
@@ -453,7 +467,7 @@ export default function Dashboard() {
                   {monitors
                     .filter((m) => statusFilter === 'all' || m.status === statusFilter)
                     .map((monitor) => {
-                      const hb = buildHeartbeat(monitor)
+                      const hb = buildHeartbeat(monitor, now)
                       return (
                         <div
                           key={monitor.id}
@@ -481,7 +495,7 @@ export default function Dashboard() {
 
                           <Heartbeat items={hb} height={20} />
 
-                          <div className="when" suppressHydrationWarning>{formatRelativeTime(monitor.lastPing)}</div>
+                          <div className="when" suppressHydrationWarning>{formatRelativeTime(monitor.lastPing, now)}</div>
 
                           <StatusBadge
                             status={monitor.status}
@@ -725,7 +739,7 @@ export default function Dashboard() {
                         />
                         <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', fontSize: 12 }}>min</span>
                       </div>
-                      <p className="cg-hint">How long to wait before alerting</p>
+                      <p className="cg-hint">How long a late job may run before it counts as down</p>
                     </div>
                   </div>
 
@@ -804,7 +818,7 @@ export default function Dashboard() {
                             <I name="check" size={11} />
                           </span>
                           <span style={{ color: 'var(--fg-2)' }}>
-                            Alert after <strong style={{ color: 'var(--fg)' }}>{newMonitor.graceMinutes || 15} min</strong> of silence
+                            Marked down <strong style={{ color: 'var(--fg)' }}>{newMonitor.graceMinutes || 15} min</strong> after a missed ping
                           </span>
                         </div>
                         <div className="row gap-8" style={{ fontSize: 12 }}>
@@ -812,7 +826,7 @@ export default function Dashboard() {
                             <I name="check" size={11} />
                           </span>
                           <span style={{ color: 'var(--fg-2)' }}>
-                            Recovery notification when it pings again
+                            Back to healthy as soon as it pings again
                           </span>
                         </div>
                       </div>
@@ -892,7 +906,7 @@ export default function Dashboard() {
                   />
                   <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', fontSize: 12 }}>min</span>
                 </div>
-                <p className="cg-hint">How long to wait before alerting</p>
+                <p className="cg-hint">How long a late job may run before it counts as down</p>
               </div>
             </div>
 
@@ -973,7 +987,7 @@ function OnboardingStrip({ onCreateClick }: { onCreateClick: () => void }) {
     },
     {
       label: 'Wait for first ping',
-      detail: "We'll watch — silence triggers an alert",
+      detail: "We'll watch — silence marks it down",
       state: 'pending' as const,
     },
   ]
