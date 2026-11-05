@@ -1,14 +1,11 @@
 import Database from 'better-sqlite3'
-import { existsSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { mkdirSync } from 'fs'
+import { dirname, join } from 'path'
 
-const DATA_DIR = join(process.cwd(), 'data')
-const DB_PATH = join(DATA_DIR, 'cronguard.db')
-
-function ensureDataDir() {
-  if (!existsSync(DATA_DIR)) {
-    mkdirSync(DATA_DIR, { recursive: true })
-  }
+// DATABASE_PATH overrides the location; ':memory:' gives a throwaway database (tests).
+// Read on first connection, not at import, so it can be set after the module loads.
+function resolveDbPath(): string {
+  return process.env.DATABASE_PATH || join(process.cwd(), 'data', 'cronguard.db')
 }
 
 let db: Database.Database | null = null
@@ -101,8 +98,11 @@ function setupShutdownHandlers() {
 export function getDb(): Database.Database {
   if (db) return db
 
-  ensureDataDir()
-  db = new Database(DB_PATH)
+  const dbPath = resolveDbPath()
+  if (dbPath !== ':memory:') {
+    mkdirSync(dirname(dbPath), { recursive: true })
+  }
+  db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
 

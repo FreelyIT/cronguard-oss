@@ -1,8 +1,7 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
-
-type Theme = 'light' | 'dark'
+import { createContext, useContext, useEffect, useSyncExternalStore } from 'react'
+import { createThemeStore, DEFAULT_THEME, type Theme } from '@/lib/theme-store'
 
 interface ThemeContextType {
   theme: Theme
@@ -11,34 +10,29 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
 
+// Module scope is safe: the store only touches localStorage when React asks for a
+// client snapshot, never during SSR.
+const themeStore = createThemeStore(() => window.localStorage)
+
+// The server cannot see localStorage; render the default and let hydration correct it.
+function getServerTheme(): Theme {
+  return DEFAULT_THEME
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('dark')
-  const [mounted, setMounted] = useState(false)
+  const theme = useSyncExternalStore(themeStore.subscribe, themeStore.getSnapshot, getServerTheme)
 
   useEffect(() => {
-    setMounted(true)
-    const stored = localStorage.getItem('theme') as Theme | null
-    if (stored) {
-      setTheme(stored)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!mounted) return
-
     const root = document.documentElement
+    // Toggle both class and data-theme attribute so design CSS that targets
+    // [data-theme="dark"] AND Tailwind utilities targeting .dark both work.
     root.classList.toggle('dark', theme === 'dark')
     root.classList.toggle('light', theme === 'light')
     root.setAttribute('data-theme', theme)
-    localStorage.setItem('theme', theme)
-  }, [theme, mounted])
-
-  const toggleTheme = () => {
-    setTheme(prev => prev === 'light' ? 'dark' : 'light')
-  }
+  }, [theme])
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme: themeStore.toggle }}>
       {children}
     </ThemeContext.Provider>
   )
