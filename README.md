@@ -447,6 +447,8 @@ npm run lint
 npm test
 ```
 
+`@emnapi/core` and `@emnapi/runtime` are listed as devDependencies on purpose. `npm install` on Windows otherwise drops them from `package-lock.json` ([npm/cli#4828](https://github.com/npm/cli/issues/4828)). The Docker build's `npm ci` on Linux then fails with `Missing: @emnapi/runtime from lock file`.
+
 ### Build from Source
 ```bash
 # Build the Docker image locally

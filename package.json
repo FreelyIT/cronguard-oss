@@ -17,6 +17,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@emnapi/core": "^1.11.3",
+    "@emnapi/runtime": "^1.11.3",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^25",
